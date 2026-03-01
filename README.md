@@ -2,7 +2,7 @@
 
 A Python bot that connects to MeshCore mesh networks via serial port, BLE, or TCP/IP. The bot responds to messages containing configured keywords, executes commands, and provides various data services including weather, solar conditions, and satellite pass information.
 
-> **This is the BreMesh fork** — maintained by [BreMesh](https://bremesh.net) with additional features for packet analysis, MQTT enrichment, and HBME integration. See [Fork Changes](#bremesh-fork-changes) below.
+> **This is the BreMesh fork** — maintained by [Bartzi](https://github.com/robrec) with additional features for packet analysis, MQTT Decryption, and HBME-BIA integration. See [Fork Changes](#bremesh-fork-changes) below.
 
 ## Features
 
@@ -17,10 +17,10 @@ A Python bot that connects to MeshCore mesh networks via serial port, BLE, or TC
 
 ### Service Plugins
 
-- **Discord Bridge**: One-way webhook bridge to post mesh messages to Discord ([docs](docs/discord-bridge.md))
+- **Discord Bridge**(it's dead jimmy): One-way webhook bridge to post mesh messages to Discord ([docs](docs/discord-bridge.md))
 - **Packet Capture**: Capture and publish packets to MQTT brokers with deep payload decoding ([docs](docs/packet-capture.md))
 - **HBME Ingestor**: Forward packets to the HBME API for centralized mesh analysis ([docs](docs/hbme-ingestor.md))
-- **Map Uploader**: Upload node adverts to map.meshcore.dev ([docs](docs/map-uploader.md))
+- **Map Uploader**(wtf why?): Upload node adverts to map.meshcore.dev ([docs](docs/map-uploader.md))
 - **Weather Service**: Scheduled forecasts, alerts, and lightning detection ([docs](docs/weather-service.md))
 
 ## Requirements
@@ -463,7 +463,7 @@ Forwards captured packets to the [HBME API](https://hbme.sh) for centralized mes
 - Live mode for production forwarding
 - Real-time WebSocket updates in the services page
 
-**Zugang erhalten:** Registriere dich auf [register.hbme.sh](https://register.hbme.sh/) und kontaktiere [@bartzi:hbme.sh](https://matrix.to/#/@bartzi:hbme.sh) via Matrix, um deinen Ingestor-Token freigeschaltet zu bekommen.
+**Zugang erhalten:** Kontaktiere [@bartzi:hbme.sh](https://matrix.to/#/@bartzi:hbme.sh) via Matrix, um deinen Token für die Registrierung auf [register.hbme.sh](https://register.hbme.sh/) zu bekommen.
 
 See [HBME Ingestor docs](docs/hbme-ingestor.md).
 
@@ -485,3 +485,4 @@ See [Web Viewer docs](docs/web-viewer.md).
 - Some commands adapted from MeshingAround bot by K7MHI Kelly Keeton 2024
 - Packet capture service based on [meshcore-packet-capture](https://github.com/agessaman/meshcore-packet-capture) by agessaman
 - [meshcore-decoder](https://github.com/michaelhart/meshcore-decoder) by Michael Hart for client-side packet decoding and decryption in the web viewer
+- SWB sonst wäre es dunkel hier.
