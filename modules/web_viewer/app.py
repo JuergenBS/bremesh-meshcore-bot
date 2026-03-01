@@ -26,6 +26,7 @@ sys.path.insert(0, project_root)
 from modules.db_manager import DBManager
 from modules.repeater_manager import RepeaterManager
 from modules.utils import resolve_path, calculate_distance
+from modules.web_viewer.services_api import ServicesAPI
 
 class BotDataViewer:
     """Complete web interface using Flask-SocketIO 5.x best practices"""
@@ -101,6 +102,9 @@ class BotDataViewer:
         
         # Start database polling for real-time data
         self._start_database_polling()
+        
+        # Start HBME service polling for real-time packet monitor
+        self._start_hbme_polling()
         
         # Start periodic cleanup
         self._start_cleanup_scheduler()
@@ -1138,6 +1142,11 @@ class BotDataViewer:
         def mesh():
             """Mesh graph visualization page"""
             return render_template('mesh.html')
+        
+        @self.app.route('/services')
+        def services():
+            """External services configuration page"""
+            return render_template('services.html')
         
         # Favicon routes
         @self.app.route('/apple-touch-icon.png')
@@ -2487,6 +2496,9 @@ class BotDataViewer:
             except Exception as e:
                 self.logger.error(f"Error getting channel feeds: {e}")
                 return jsonify({'error': str(e)}), 500
+        
+        # Initialize Services API module (HBME Ingestor, etc.)
+        self.services_api = ServicesAPI(self.app, self.db_manager, self.logger)
     
     def _setup_socketio_handlers(self):
         """Setup SocketIO event handlers using modern patterns"""
@@ -2586,6 +2598,19 @@ class BotDataViewer:
             except Exception as e:
                 self.logger.error(f"Error in handle_subscribe_mesh: {e}", exc_info=True)
         
+        @self.socketio.on('subscribe_hbme')
+        def handle_subscribe_hbme():
+            """Handle HBME service stream subscription"""
+            try:
+                client_id = getattr(request, 'sid', None)
+                with self._clients_lock:
+                    if client_id and client_id in self.connected_clients:
+                        self.connected_clients[client_id]['subscribed_hbme'] = True
+                emit('status', {'message': 'Subscribed to HBME stream'})
+                self.logger.debug(f"Client {client_id} subscribed to HBME stream")
+            except Exception as e:
+                self.logger.error(f"Error in handle_subscribe_hbme: {e}", exc_info=True)
+
         @self.socketio.on('ping')
         def handle_ping():
             """Handle client ping (modern ping/pong pattern)"""
@@ -2809,6 +2834,96 @@ class BotDataViewer:
         polling_thread = threading.Thread(target=poll_database, daemon=True)
         polling_thread.start()
         self.logger.info("Database polling started")
+    
+    def _start_hbme_polling(self):
+        """Start background thread to poll HBME packet data and push via WebSocket"""
+        import threading
+        
+        def poll_hbme():
+            import time
+            import json
+            
+            last_seen_ts = None   # Track newest packet by timestamp (queue is capped at 50)
+            last_queue_empty = True
+            last_stats_hash = ''
+            
+            while True:
+                try:
+                    # Check if any client is subscribed
+                    has_subscribers = False
+                    with self._clients_lock:
+                        for client_info in self.connected_clients.values():
+                            if client_info.get('subscribed_hbme', False):
+                                has_subscribers = True
+                                break
+                    
+                    if not has_subscribers:
+                        time.sleep(3)
+                        continue
+                    
+                    # Read packet queue from DB
+                    preview_json = self.db_manager.get_metadata('hbme_preview_queue')
+                    packets = []
+                    if preview_json:
+                        try:
+                            packets = json.loads(preview_json)
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    
+                    current_empty = len(packets) == 0
+                    
+                    if current_empty and not last_queue_empty:
+                        # Queue was cleared — notify clients
+                        self.socketio.emit('hbme_clear')
+                        last_seen_ts = None
+                    elif packets:
+                        # Find packets newer than last_seen_ts
+                        if last_seen_ts is None:
+                            # First poll — don't push (initial load done via HTTP)
+                            pass
+                        else:
+                            new_packets = [p for p in packets if p.get('timestamp', '') > last_seen_ts]
+                            # Send newest first (reversed chronological = oldest first emit)
+                            for pkt in sorted(new_packets, key=lambda p: p.get('timestamp', '')):
+                                self.socketio.emit('hbme_packet', pkt)
+                        # Update last seen to newest packet timestamp
+                        last_seen_ts = max(
+                            (p.get('timestamp', '') for p in packets),
+                            default=last_seen_ts
+                        )
+                    
+                    last_queue_empty = current_empty
+                    
+                    # Build stats snapshot
+                    db = self.db_manager
+                    stats = {
+                        'enabled': (db.get_metadata('hbme_ingestor_enabled') or '') == 'true',
+                        'running': (db.get_metadata('hbme_stats_running') or '') == 'true',
+                        'preview_mode': (db.get_metadata('hbme_ingestor_preview_mode') or 'true') == 'true',
+                        'packets_sent': int(db.get_metadata('hbme_stats_packets_sent') or 0),
+                        'packets_failed': int(db.get_metadata('hbme_stats_packets_failed') or 0),
+                        'packets_captured': current_count,
+                        'avg_response_time_ms': float(db.get_metadata('hbme_stats_avg_response_ms') or 0),
+                        'last_send_time': db.get_metadata('hbme_stats_last_send_time'),
+                        'last_error': db.get_metadata('hbme_stats_last_error'),
+                        'last_error_time': db.get_metadata('hbme_stats_last_error_time'),
+                    }
+                    
+                    # Only emit if stats changed
+                    stats_hash = json.dumps(stats, sort_keys=True)
+                    if stats_hash != last_stats_hash:
+                        self.socketio.emit('hbme_stats', stats)
+                        last_stats_hash = stats_hash
+                    
+                    time.sleep(1.5)  # Poll every 1.5s for near-realtime feel
+                    
+                except Exception as e:
+                    self.logger.debug(f"HBME polling error: {e}")
+                    time.sleep(5)
+        
+        hbme_thread = threading.Thread(target=poll_hbme, daemon=True)
+        hbme_thread.start()
+        self.logger.info("HBME service polling started")
     
     def _start_cleanup_scheduler(self):
         """Start background thread for periodic database cleanup"""

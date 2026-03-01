@@ -132,11 +132,123 @@ stats_refresh_interval = 300      # Publish status every 5 minutes
 jwt_renewal_interval = 86400      # Renew JWT every 24 hours
 ```
 
+### Channel Decryption (GRP_TXT)
+
+Public hashtag channels use deterministic keys derived from the channel name. The packet capture service can decrypt these messages and include the plaintext in MQTT payloads.
+
+```ini
+[PacketCapture]
+# Comma-separated list of channels to decrypt
+# "Public" = default MeshCore channel (case-sensitive, no # prefix)
+# Hashtag channels with # prefix, e.g. #ping, #CQ, #ARES
+decode_hashtag_channels = Public,#ping,#test,#emergency
+```
+
+**Key derivation:**
+- Key = `SHA256(channel_name_as_utf8_bytes)[:16]` (16 bytes = AES-128 key)
+- Channel hash byte = `SHA256(key_bytes)[0]` (used for fast matching)
+- `Public` is hashed as-is: `SHA256(b"Public")[:16]`
+- `#ping` is hashed as-is: `SHA256(b"#ping")[:16]`
+
+> **Note:** Only public hashtag channels can be decrypted this way. Private channels with custom (non-hashtag) keys require the actual key bytes, which are not derivable from the name.
+
+**Decryption algorithm:** AES-128-ECB with HMAC-SHA256 MAC verification (2-byte MAC), matching MeshCore firmware behavior.
+
 ---
 
-## Packet Format
+## Decoded Payloads
 
-### Packet Message
+Every packet published to MQTT includes a `decoded` field with structured data extracted from the raw packet bytes. This allows MQTT consumers to process packets without implementing their own packet parser.
+
+### Decoded Fields (always present)
+
+| Field | Description |
+|-------|-------------|
+| `header_byte` | Raw header byte (hex, e.g. `0x15`) |
+| `route_type_name` | Route type: `FLOOD`, `DIRECT`, `TRANSPORT_FLOOD`, `TRANSPORT_DIRECT` |
+| `payload_type_name` | Payload type: `REQ`, `RESPONSE`, `TXT_MSG`, `ACK`, `ADVERT`, `GRP_TXT`, etc. |
+| `payload_version` | Protocol version (0 or 1) |
+| `path_len` | Number of path hops |
+| `path_nodes` | Array of path node hex bytes |
+
+### Type-Specific Decoded Data
+
+#### ADVERT
+```json
+{
+  "advert": {
+    "public_key": "D92015F0...",
+    "advert_time": 1772391213,
+    "advert_time_iso": "2026-03-01T18:53:33Z",
+    "signature": "B8D7FBF6...",
+    "device_role": "Repeater",
+    "lat": 53.078096,
+    "lon": 8.80524,
+    "name": "Tick 🔋 @BreMesh"
+  }
+}
+```
+
+#### TXT_MSG
+```json
+{
+  "text": {
+    "content": "Hello from the mesh!",
+    "length": 21
+  }
+}
+```
+
+#### GRP_TXT (decrypted)
+When the channel key is available (configured in `decode_hashtag_channels`):
+```json
+{
+  "group_text": {
+    "encrypted": false,
+    "channel_name": "#ping",
+    "channel_hash": "0x28",
+    "sender": "Ritter Fips",
+    "message": "ping",
+    "timestamp": 1772392140,
+    "timestamp_iso": "2026-03-01T19:09:00Z",
+    "flags": 0
+  }
+}
+```
+
+When the channel key is not available:
+```json
+{
+  "group_text": {
+    "encrypted": true,
+    "payload_bytes": 19,
+    "channel_hash": "0xfe",
+    "note": "No matching channel key found"
+  }
+}
+```
+
+#### ACK
+```json
+{
+  "ack": {
+    "ack_hash": "A1B2C3D4"
+  }
+}
+```
+
+#### REQ / RESPONSE / PATH / TRACE
+```json
+{
+  "request_response": { "payload_bytes": 20 }
+}
+```
+
+---
+
+## Full Packet Examples
+
+### Packet Message (with decoded payload)
 ```json
 {
   "origin": "MyBot",
@@ -145,13 +257,28 @@ jwt_renewal_interval = 86400      # Renew JWT every 24 hours
   "type": "PACKET",
   "direction": "rx",
   "len": "42",
-  "packet_type": "2",
-  "route": "D",
+  "packet_type": "5",
+  "route": "F",
   "payload_len": "32",
   "raw": "DEADBEEF...",
-  "SNR": "8.5",
-  "RSSI": "-42",
-  "hash": "ABC123..."
+  "SNR": "13.5",
+  "RSSI": "-51",
+  "hash": "ABC123...",
+  "decoded": {
+    "header_byte": "0x15",
+    "route_type_name": "FLOOD",
+    "payload_type_name": "GRP_TXT",
+    "payload_version": 0,
+    "path_len": 2,
+    "path_nodes": ["b0", "d9"],
+    "group_text": {
+      "encrypted": false,
+      "channel_name": "#ping",
+      "sender": "Ritter Fips",
+      "message": "ping",
+      "timestamp_iso": "2026-03-01T19:09:00Z"
+    }
+  }
 }
 ```
 

@@ -947,8 +947,9 @@ long_jokes = false
             else:
                 # Create BLE connection (default)
                 ble_device_name = self.config.get('Connection', 'ble_device_name', fallback=None)
+                ble_pin = self.config.get('Connection', 'ble_pin', fallback=None)
                 self.logger.info(f"Connecting via BLE" + (f" to device: {ble_device_name}" if ble_device_name else ""))
-                self.meshcore = await meshcore.MeshCore.create_ble(ble_device_name, debug=False)
+                self.meshcore = await meshcore.MeshCore.create_ble(ble_device_name, pin=ble_pin, debug=False)
             
             if self.meshcore.is_connected:
                 self.connected = True

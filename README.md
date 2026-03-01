@@ -2,6 +2,8 @@
 
 A Python bot that connects to MeshCore mesh networks via serial port, BLE, or TCP/IP. The bot responds to messages containing configured keywords, executes commands, and provides various data services including weather, solar conditions, and satellite pass information.
 
+> **This is the BreMesh fork** — maintained by [BreMesh](https://bremesh.net) with additional features for packet analysis, MQTT enrichment, and HBME integration. See [Fork Changes](#bremesh-fork-changes) below.
+
 ## Features
 
 - **Connection Methods**: Serial port, BLE (Bluetooth Low Energy), or TCP/IP
@@ -16,7 +18,8 @@ A Python bot that connects to MeshCore mesh networks via serial port, BLE, or TC
 ### Service Plugins
 
 - **Discord Bridge**: One-way webhook bridge to post mesh messages to Discord ([docs](docs/discord-bridge.md))
-- **Packet Capture**: Capture and publish packets to MQTT brokers ([docs](docs/packet-capture.md))
+- **Packet Capture**: Capture and publish packets to MQTT brokers with deep payload decoding ([docs](docs/packet-capture.md))
+- **HBME Ingestor**: Forward packets to the HBME API for centralized mesh analysis ([docs](docs/hbme-ingestor.md))
 - **Map Uploader**: Upload node adverts to map.meshcore.dev ([docs](docs/map-uploader.md))
 - **Weather Service**: Scheduled forecasts, alerts, and lightning detection ([docs](docs/weather-service.md))
 
@@ -397,6 +400,84 @@ class MyCommand(BaseCommand):
 ## License
 
 This project is licensed under the MIT License.
+
+---
+
+## BreMesh Fork Changes
+
+This fork adds the following features on top of upstream meshcore-bot:
+
+### Enriched MQTT Payloads (Packet Capture)
+
+Every packet published to MQTT now includes a `decoded` field with structured, human-readable data extracted from the raw packet bytes:
+
+- **Header**: route type, payload type, version, path nodes
+- **ADVERT**: public key, device name, role (Companion/Repeater/RoomServer/Sensor), GPS coordinates, advert timestamp
+- **TXT_MSG**: decoded plain text content
+- **GRP_TXT**: decrypted channel messages for public hashtag channels (AES-128-ECB + HMAC verification)
+- **ACK**: ack hash
+- **REQ/RESPONSE/PATH/TRACE**: payload size summaries
+
+**Example decoded MQTT message:**
+```json
+{
+  "origin": "6EF10422",
+  "SNR": "13.5",
+  "RSSI": "-51",
+  "decoded": {
+    "route_type_name": "FLOOD",
+    "payload_type_name": "GRP_TXT",
+    "path_nodes": ["ef", "fc", "17", "b0"],
+    "group_text": {
+      "encrypted": false,
+      "channel_name": "#ping",
+      "sender": "Ritter Fips",
+      "message": "ping",
+      "timestamp_iso": "2026-03-01T19:09:00Z"
+    }
+  }
+}
+```
+
+See [Packet Capture docs](docs/packet-capture.md) for configuration.
+
+### GRP_TXT Channel Decryption
+
+Public hashtag channels (e.g. `#ping`, `#CQ`, `Public`) use deterministic keys derived from the channel name. The packet capture service can decrypt these on the fly:
+
+```ini
+[PacketCapture]
+decode_hashtag_channels = Public,#ping,#test,#emergency
+```
+
+- `Public` — the default MeshCore channel (case-sensitive, no `#` prefix)
+- `#channelname` — hashtag channels with `#` prefix
+- Key derivation: `SHA256(channel_name_as_bytes)[:16]`
+
+### HBME Ingestor Service
+
+Forwards captured packets to the [HBME API](https://hbme.sh) for centralized mesh network analysis. Features:
+
+- Authelia SSO authentication
+- Preview mode with packet queue (viewable in web UI)
+- Live mode for production forwarding
+- Real-time WebSocket updates in the services page
+
+**Zugang erhalten:** Registriere dich auf [register.hbme.sh](https://register.hbme.sh/) und kontaktiere [@bartzi:hbme.sh](https://matrix.to/#/@bartzi:hbme.sh) via Matrix, um deinen Ingestor-Token freigeschaltet zu bekommen.
+
+See [HBME Ingestor docs](docs/hbme-ingestor.md).
+
+### Services Page (Web Viewer)
+
+New `/services` page in the web viewer for managing service plugins:
+
+- HBME Ingestor management (credentials, mode toggle, packet monitor)
+- Real-time packet feed via WebSocket with HTTP polling fallback
+- Dark theme support
+
+See [Web Viewer docs](docs/web-viewer.md).
+
+---
 
 ## Acknowledgments
 

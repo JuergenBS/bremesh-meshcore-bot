@@ -25,7 +25,7 @@ services:
     
     # Environment variables (optional, can override config.ini settings)
     environment:
-      - TZ=America/Los_Angeles  # Set your timezone
+      - TZ=Europe/Berlin  # Set your timezone
       # - PYTHONUNBUFFERED=1  # Already set in Dockerfile
     
     # Volume mappings for persistent data

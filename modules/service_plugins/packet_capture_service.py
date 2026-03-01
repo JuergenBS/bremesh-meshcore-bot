@@ -205,7 +205,161 @@ class PacketCaptureService(BaseServicePlugin):
         # Note: Python signing can fetch private key from device if not provided via file
         # The create_auth_token_async function will automatically try to export the key
         # from the device if private_key_hex is None and meshcore_instance is available
+
+        # Channel keyring for GRP_TXT decryption
+        # Maps channel_hash_byte (int) -> list of (key_bytes, channel_name)
+        self._channel_keyring: Dict[int, List[tuple]] = {}
+        self._build_channel_keyring(config)
     
+    def _build_channel_keyring(self, config) -> None:
+        """Build a keyring of channel keys for GRP_TXT decryption.
+
+        Key derivation follows MeshCore firmware conventions:
+        - Channel names starting with '#' (e.g. #ping): key = SHA256(name_as_is)[:16]
+        - Channel names without '#' (e.g. Public): key = SHA256(name_as_is)[:16]
+        - The channel hash byte = SHA256(key_bytes)[0], used for fast matching.
+
+        Sources:
+        - decode_hashtag_channels from [PacketCapture] config
+        - Bot's channel_manager cache (if available)
+        """
+        self._channel_keyring = {}
+        channels_added = set()
+
+        # 1. From config: decode_hashtag_channels = Public,#ping,#CQ
+        channels_str = config.get('PacketCapture', 'decode_hashtag_channels', fallback='')
+        if channels_str:
+            for name in channels_str.split(','):
+                name = name.strip()
+                if not name:
+                    continue
+                # Derive key: hash the name exactly as given
+                key_bytes = hashlib.sha256(name.encode('utf-8')).digest()[:16]
+                hash_byte = hashlib.sha256(key_bytes).digest()[0]
+                if hash_byte not in self._channel_keyring:
+                    self._channel_keyring[hash_byte] = []
+                if name not in channels_added:
+                    self._channel_keyring[hash_byte].append((key_bytes, name))
+                    channels_added.add(name)
+                    self.logger.debug(f"Channel keyring: added '{name}' (hash=0x{hash_byte:02x}, key={key_bytes.hex()[:8]}...)")
+
+        if channels_added:
+            self.logger.info(f"Channel keyring: {len(channels_added)} channel(s) loaded for GRP_TXT decryption: {', '.join(sorted(channels_added))}")
+        else:
+            self.logger.debug("Channel keyring: no decode_hashtag_channels configured, GRP_TXT packets will not be decrypted")
+
+    @staticmethod
+    def _calculate_channel_hash(key_bytes: bytes) -> int:
+        """Calculate the channel hash byte from a 16-byte channel key.
+
+        Returns: first byte of SHA256(key_bytes)
+        """
+        return hashlib.sha256(key_bytes).digest()[0]
+
+    def _decrypt_group_text(self, payload_bytes: bytes) -> Dict[str, Any]:
+        """Attempt to decrypt a GRP_TXT payload using the channel keyring.
+
+        Wire format:
+            [1 byte]  channel_hash  — first byte of SHA256(channel_key)
+            [2 bytes] cipher_mac    — HMAC-SHA256(ciphertext, key_padded_32)[:2]
+            [N bytes] ciphertext    — AES-128-ECB encrypted
+
+        Decrypted plaintext:
+            [4 bytes] timestamp     — little-endian uint32
+            [1 byte]  flags
+            [N bytes] message text  — UTF-8, null-terminated, "SENDER: message" format
+
+        Returns:
+            Dict with decryption result. On success includes sender, message,
+            timestamp, channel_name. On failure includes encrypted=True.
+        """
+        from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+        import hmac as hmac_mod
+
+        result: Dict[str, Any] = {}
+
+        if len(payload_bytes) < 4:  # 1 hash + 2 mac + at least 1 byte ciphertext
+            result['encrypted'] = True
+            result['payload_bytes'] = len(payload_bytes)
+            result['error'] = 'Payload too short for GRP_TXT'
+            return result
+
+        channel_hash_byte = payload_bytes[0]
+        cipher_mac = payload_bytes[1:3]
+        ciphertext = payload_bytes[3:]
+
+        # Look up candidate keys by hash byte
+        candidates = self._channel_keyring.get(channel_hash_byte, [])
+        if not candidates:
+            result['encrypted'] = True
+            result['payload_bytes'] = len(payload_bytes)
+            result['channel_hash'] = f'0x{channel_hash_byte:02x}'
+            result['note'] = 'No matching channel key found'
+            return result
+
+        for key_bytes, channel_name in candidates:
+            try:
+                # HMAC-SHA256 verification: pad key to 32 bytes, compute HMAC over ciphertext
+                key_padded = key_bytes + b'\x00' * 16  # pad 16-byte key to 32 bytes
+                computed_mac = hmac_mod.new(key_padded, ciphertext, hashlib.sha256).digest()[:2]
+
+                if computed_mac != cipher_mac:
+                    continue  # MAC mismatch, try next candidate
+
+                # AES-128-ECB decrypt (no padding)
+                cipher = Cipher(algorithms.AES(key_bytes), modes.ECB())
+                decryptor = cipher.decryptor()
+                plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+
+                if len(plaintext) < 5:
+                    continue
+
+                # Parse plaintext: timestamp(4 LE) + flags(1) + text
+                timestamp = int.from_bytes(plaintext[0:4], 'little')
+                flags = plaintext[4]
+                message_bytes = plaintext[5:]
+
+                # Decode text, strip null terminator
+                text = message_bytes.decode('utf-8', errors='replace')
+                null_idx = text.find('\x00')
+                if null_idx >= 0:
+                    text = text[:null_idx]
+
+                # Split "SENDER: message" format
+                sender = None
+                content = text
+                colon_idx = text.find(': ')
+                if 0 < colon_idx < 50:
+                    potential_sender = text[:colon_idx]
+                    if not any(c in potential_sender for c in ':[]'):
+                        sender = potential_sender
+                        content = text[colon_idx + 2:]
+
+                result['encrypted'] = False
+                result['channel_name'] = channel_name
+                result['channel_hash'] = f'0x{channel_hash_byte:02x}'
+                if sender:
+                    result['sender'] = sender
+                result['message'] = content
+                result['timestamp'] = timestamp
+                try:
+                    result['timestamp_iso'] = datetime.utcfromtimestamp(timestamp).isoformat() + 'Z'
+                except (OSError, ValueError, OverflowError):
+                    pass
+                result['flags'] = flags
+                return result
+
+            except Exception as e:
+                self.logger.debug(f"GRP_TXT decrypt attempt failed for '{channel_name}': {e}")
+                continue
+
+        # No candidate decrypted successfully
+        result['encrypted'] = True
+        result['payload_bytes'] = len(payload_bytes)
+        result['channel_hash'] = f'0x{channel_hash_byte:02x}'
+        result['note'] = 'MAC verification failed for all candidate keys'
+        return result
+
     def _parse_mqtt_brokers(self, config) -> List[Dict[str, Any]]:
         """Parse MQTT broker configuration (mqttN_* format).
         
@@ -745,7 +899,12 @@ class PacketCaptureService(BaseServicePlugin):
         # Add path for route=D (matches original script)
         if route == "D" and packet_info.get('path'):
             packet_data["path"] = ",".join(packet_info['path'])
-        
+
+        # Decode and add structured payload details
+        decoded = self._decode_payload_details(packet_info)
+        if decoded:
+            packet_data['decoded'] = decoded
+
         return packet_data
     
     async def process_packet(self, raw_hex: str, payload: Dict[str, Any], metadata: Optional[Dict[str, Any]] = None) -> None:
@@ -934,7 +1093,165 @@ class PacketCaptureService(BaseServicePlugin):
             if self.debug:
                 self.logger.debug(f"Decode error traceback: {traceback.format_exc()}")
             return None
-    
+
+    def _decode_payload_details(self, packet_info: Dict[str, Any]) -> Dict[str, Any]:
+        """Decode payload-specific details from packet_info.
+
+        Extracts human-readable information from the raw payload based on
+        its type (ADVERT, TXT_MSG, GRP_TXT, ACK, etc.).
+
+        Args:
+            packet_info: Decoded packet info from decode_packet().
+
+        Returns:
+            Dict with decoded fields. Always contains at least:
+            - header_byte, route_type_name, payload_type_name, payload_version
+            - path_len, path_nodes
+        """
+        decoded: Dict[str, Any] = {}
+
+        try:
+            # --- Header level info ---
+            decoded['header_byte'] = packet_info.get('header', '')
+            decoded['route_type_name'] = packet_info.get('route_type', 'UNKNOWN')
+            decoded['payload_type_name'] = packet_info.get('payload_type', 'UNKNOWN')
+            decoded['payload_version'] = packet_info.get('payload_version', 0)
+            decoded['path_len'] = packet_info.get('path_len', 0)
+            decoded['path_nodes'] = packet_info.get('path', [])
+
+            if packet_info.get('has_transport_codes') and packet_info.get('transport_codes'):
+                decoded['transport_codes'] = packet_info['transport_codes']
+
+            payload_hex = packet_info.get('payload_hex', '')
+            if not payload_hex:
+                return decoded
+
+            payload_bytes = bytes.fromhex(payload_hex)
+            payload_type = packet_info.get('payload_type', 'UNKNOWN')
+
+            # --- ADVERT ---
+            if payload_type == 'ADVERT':
+                decoded['advert'] = self._decode_advert_payload(payload_bytes)
+
+            # --- TXT_MSG (plain text, not encrypted) ---
+            elif payload_type == 'TXT_MSG':
+                decoded['text'] = self._decode_text_payload(payload_bytes)
+
+            # --- GRP_TXT (group text — attempt decryption with channel keyring) ---
+            elif payload_type == 'GRP_TXT':
+                decoded['group_text'] = self._decrypt_group_text(payload_bytes)
+
+            # --- ACK ---
+            elif payload_type == 'ACK':
+                if len(payload_bytes) >= 4:
+                    decoded['ack'] = {
+                        'ack_hash': payload_bytes[:4].hex().upper()
+                    }
+
+            # --- PATH ---
+            elif payload_type == 'PATH':
+                decoded['path_data'] = {
+                    'payload_bytes': len(payload_bytes),
+                    'payload_hex': payload_hex[:64] + ('...' if len(payload_hex) > 64 else '')
+                }
+
+            # --- TRACE ---
+            elif payload_type == 'TRACE':
+                decoded['trace'] = {
+                    'payload_bytes': len(payload_bytes),
+                }
+
+            # --- REQ / RESPONSE ---
+            elif payload_type in ('REQ', 'RESPONSE'):
+                decoded['request_response'] = {
+                    'payload_bytes': len(payload_bytes),
+                }
+
+        except Exception as e:
+            self.logger.debug(f"Error decoding payload details: {e}")
+
+        return decoded
+
+    def _decode_advert_payload(self, payload: bytes) -> Dict[str, Any]:
+        """Decode an ADVERT payload into structured data.
+
+        Layout: pub_key(32) + timestamp(4 LE) + signature(64) + app_data(variable)
+        app_data[0] = flags byte:
+            bits 0-3: device type (1=Chat, 2=Repeater, 3=Room, 4=Sensor)
+            bit 4 (0x10): has lat/lon
+            bit 5 (0x20): has feat1
+            bit 6 (0x40): has feat2
+            bit 7 (0x80): has name
+        """
+        result: Dict[str, Any] = {}
+        try:
+            if len(payload) < 101:
+                result['error'] = f'Payload too short ({len(payload)} bytes, need >= 101)'
+                return result
+
+            result['public_key'] = payload[0:32].hex().upper()
+            advert_time = int.from_bytes(payload[32:36], 'little')
+            result['advert_time'] = advert_time
+            try:
+                result['advert_time_iso'] = datetime.utcfromtimestamp(advert_time).isoformat() + 'Z'
+            except (OSError, ValueError, OverflowError):
+                pass
+            result['signature'] = payload[36:100].hex().upper()
+
+            app_data = payload[100:]
+            if len(app_data) == 0:
+                return result
+
+            flags = app_data[0]
+            adv_type = flags & 0x0F
+            role_map = {1: 'Companion', 2: 'Repeater', 3: 'RoomServer', 4: 'Sensor'}
+            result['device_role'] = role_map.get(adv_type, f'Type{adv_type}')
+
+            i = 1
+            # Location
+            if flags & 0x10:
+                if len(app_data) >= i + 8:
+                    lat = int.from_bytes(app_data[i:i+4], 'little', signed=True)
+                    lon = int.from_bytes(app_data[i+4:i+8], 'little', signed=True)
+                    result['lat'] = round(lat / 1_000_000, 6)
+                    result['lon'] = round(lon / 1_000_000, 6)
+                    i += 8
+
+            # Feature 1
+            if flags & 0x20:
+                if len(app_data) >= i + 2:
+                    result['feat1'] = int.from_bytes(app_data[i:i+2], 'little')
+                    i += 2
+
+            # Feature 2
+            if flags & 0x40:
+                if len(app_data) >= i + 2:
+                    result['feat2'] = int.from_bytes(app_data[i:i+2], 'little')
+                    i += 2
+
+            # Name
+            if flags & 0x80:
+                if len(app_data) > i:
+                    name = app_data[i:].decode('utf-8', errors='replace').rstrip('\x00')
+                    result['name'] = name
+
+        except Exception as e:
+            result['decode_error'] = str(e)
+
+        return result
+
+    def _decode_text_payload(self, payload: bytes) -> Dict[str, Any]:
+        """Decode a TXT_MSG payload (plain text, unencrypted)."""
+        result: Dict[str, Any] = {}
+        try:
+            # TXT_MSG payload is raw text (possibly with sender prefix)
+            text = payload.decode('utf-8', errors='replace').rstrip('\x00')
+            result['content'] = text
+            result['length'] = len(text)
+        except Exception as e:
+            result['decode_error'] = str(e)
+        return result
+
     def _get_bot_name(self) -> str:
         """Get bot name from device or config.
         

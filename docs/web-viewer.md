@@ -7,10 +7,13 @@ A web-based interface for viewing and analyzing data from your MeshCore Bot.
 - **Dashboard**: Overview of database statistics and bot status
 - **Repeater Contacts**: View active repeater contacts with location and status information
 - **Contact Tracking**: Complete history of all heard contacts with signal strength and routing data
+- **Services**: Manage and monitor service plugins (HBME Ingestor, Packet Capture) with real-time packet feed
+- **Real-time Packet Stream**: Live packet monitor on the `/realtime` page with client-side packet decoding
 - **Cache Data**: View cached geocoding and API responses
 - **Purging Log**: Audit trail of contact purging operations
-- **Real-time Updates**: Auto-refreshes every 30 seconds
+- **Real-time Updates**: WebSocket (Socket.IO) for live data, with HTTP polling fallback
 - **API Endpoints**: JSON API for programmatic access
+- **Dark Theme**: Full dark mode support across all pages
 
 ## Quick Start
 
@@ -102,6 +105,19 @@ Once started, open your web browser and navigate to:
 - Audit trail of contact purging operations
 - Timestamps and reasons
 - Contact names and public keys
+
+### Services (`/services`)
+- **HBME Ingestor management**: Configure credentials, toggle preview/live mode
+- **Real-time packet monitor**: Live WebSocket feed of captured packets
+- **Statistics dashboard**: Packets sent, failed, and captured counts
+- **Mode toggle**: Switch between preview (local-only) and live (API forwarding) mode
+- Dark theme supported
+
+### Real-time Packet Stream (`/realtime`)
+- Live packet feed with client-side MeshCore packet decoding
+- Packet type filtering and auto-scroll
+- Signal quality indicators (SNR/RSSI)
+- Channel message decryption for configured hashtag channels
 
 ## API Endpoints
 
@@ -238,8 +254,6 @@ chmod +x restart_viewer.sh
 
 ## Future Enhancements
 
-- Live packet streaming
-- Real-time message monitoring
 - Interactive contact management
 - Export functionality
 - Authentication system

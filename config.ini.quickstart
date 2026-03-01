@@ -56,3 +56,43 @@ teams = seahawks,mariners,sounders,kraken
 # host = 127.0.0.1
 # port = 8080
 # auto_start = true
+
+# Optional: Packet capture with MQTT publishing
+# Captures all MeshCore packets and publishes to MQTT brokers
+# Start a local test broker: docker run -d --name mosquitto -p 1883:1883 eclipse-mosquitto:2
+# [PacketCapture]
+# enabled = true
+# mqtt_enabled = true
+# iata = LOC
+#
+# # Local test broker (Mosquitto via Docker, no auth)
+# mqtt1_enabled = true
+# mqtt1_server = localhost
+# mqtt1_port = 1883
+# mqtt1_transport = tcp
+# mqtt1_use_tls = false
+# mqtt1_use_auth_token = false
+# mqtt1_topic_prefix = meshcore/packets
+# mqtt1_topic_status = meshcore/{iata}/status
+# mqtt1_topic_packets = meshcore/{iata}/packets
+#
+# # Let's Mesh Analyzer (US) - uncomment for production
+# #mqtt2_enabled = true
+# #mqtt2_server = mqtt-us-v1.letsmesh.net
+# #mqtt2_port = 443
+# #mqtt2_transport = websockets
+# #mqtt2_use_tls = true
+# #mqtt2_use_auth_token = true
+# #mqtt2_token_audience = mqtt-us-v1.letsmesh.net
+# #mqtt2_topic_status = meshcore/{IATA}/{PUBLIC_KEY}/status
+# #mqtt2_topic_packets = meshcore/{IATA}/{PUBLIC_KEY}/packets
+# #mqtt2_websocket_path = /mqtt
+
+[HBMEIngestor]
+# Enable or disable the HBME Ingestor service
+# This loads the service - actual packet sending is controlled via the web UI
+enabled = true
+api_url = https://api.hbme.sh/ingestor/auth/packet
+auth_url = https://auth.hbme.sh/api/firstfactor
+# username and password are managed via the web UI
+preview_mode = true

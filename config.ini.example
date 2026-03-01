@@ -1274,6 +1274,23 @@ mqtt2_websocket_path = /mqtt
 mqtt2_client_id = 
 mqtt2_upload_packet_types = 
 
+# MQTT Broker 3 - Local Test Broker (Mosquitto via Docker)
+# Start with: docker run -d --name mosquitto -p 1883:1883 eclipse-mosquitto:2
+# This broker listens on plain TCP without auth – for local testing only!
+#mqtt3_enabled = true
+#mqtt3_server = localhost
+#mqtt3_port = 1883
+#mqtt3_transport = tcp
+#mqtt3_use_tls = false
+#mqtt3_use_auth_token = false
+#mqtt3_username =
+#mqtt3_password =
+#mqtt3_topic_prefix = meshcore/packets
+#mqtt3_topic_status = meshcore/{iata}/status
+#mqtt3_topic_packets = meshcore/{iata}/packets
+#mqtt3_client_id =
+#mqtt3_upload_packet_types =
+
 # Stats and status publishing
 # Enable stats in status messages
 stats_in_status_enabled = true
@@ -1440,3 +1457,13 @@ avatar_style = color
 # bridge.general = https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGHIJKLMNOPQRST
 # bridge.emergency = https://discord.com/api/webhooks/987654321098765432/ZYXWVUTSRQPONMLKJIHGFEDCBA0987654321zyxwvutsrqponmlkjihgf
 # bridge.wx = https://discord.com/api/webhooks/111222333444555666/WeatherChannelWebhookTokenGoesHere1234567890abcdefghijklmno
+
+
+[HBMEIngestor]
+# Enable or disable the HBME Ingestor service
+# This loads the service - actual packet sending is controlled via the web UI
+enabled = true
+api_url = https://api.hbme.sh/ingestor/auth/packet
+auth_url = https://auth.hbme.sh/api/firstfactor
+# username and password are managed via the web UI
+preview_mode = true

@@ -5,7 +5,8 @@ Service plugins extend the bot with background services that run alongside the m
 | Plugin | Description |
 |--------|-------------|
 | [Discord Bridge](discord-bridge.md) | One-way webhook bridge to post mesh messages to Discord channels |
-| [Packet Capture](packet-capture.md) | Capture packets from the mesh and publish them to MQTT brokers |
+| [Packet Capture](packet-capture.md) | Capture packets from the mesh and publish them to MQTT brokers with decoded payloads |
+| [HBME Ingestor](hbme-ingestor.md) | Forward packets to the HBME API for centralized mesh network analysis |
 | [Map Uploader](map-uploader.md) | Upload node advertisements to [map.meshcore.dev](https://map.meshcore.dev) for network visualization |
 | [Weather Service](weather-service.md) | Scheduled weather forecasts, weather alerts, and lightning detection |
 | [Earthquake Service](earthquake-service.md) | Earthquake alerts for a configured region (USGS API, defaults: California) |
