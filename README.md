@@ -435,6 +435,300 @@ Every packet published to MQTT now includes a `decoded` field with structured, h
 
 See [Packet Capture docs](docs/packet-capture.md) for configuration.
 
+### MQTT Subscribe: Nachrichten ins Mesh senden
+
+Der Bot kann Nachrichten via MQTT empfangen und ins Mesh-Netzwerk senden. So lässt sich der Bot z.B. aus Node-RED, Home Assistant oder eigenen Skripten steuern.
+
+**Konfiguration** in `config.ini` unter `[PacketCapture]`:
+
+```ini
+mqtt_subscribe_enabled = true
+mqtt1_topic_send_dm = meshcore/send/dm
+mqtt1_topic_send_channel = meshcore/send/channel
+```
+
+**DM senden** (Topic: `meshcore/send/dm`):
+```json
+{"destination": "NodeName", "message": "Hallo!"}
+```
+
+**Channel-Nachricht senden** (Topic: `meshcore/send/channel`):
+```json
+{"channel": "#ping", "message": "Pong! Test via MQTT"}
+```
+
+**Test via Kommandozeile:**
+```bash
+# Channel-Nachricht
+mosquitto_pub -h localhost -t meshcore/send/channel -m '{"channel": "#ping", "message": "Test via MQTT"}'
+
+# Direktnachricht
+mosquitto_pub -h localhost -t meshcore/send/dm -m '{"destination": "MeinNode", "message": "Hallo!"}'
+```
+
+### Node-RED Demo Flows
+
+Die folgenden Flows zeigen, wie man den Bot aus Node-RED heraus steuert. Importiere sie über **Menu → Import → Clipboard** in Node-RED.
+
+<details>
+<summary><b>Flow 1: Channel-Nachricht senden (Inject → MQTT)</b></summary>
+
+Sendet eine Nachricht auf einen MeshCore-Channel per Knopfdruck.
+
+```json
+[
+    {
+        "id": "mesh_channel_flow",
+        "type": "tab",
+        "label": "MeshCore Channel",
+        "disabled": false
+    },
+    {
+        "id": "inject_channel",
+        "type": "inject",
+        "z": "mesh_channel_flow",
+        "name": "Sende #ping",
+        "props": [{"p": "payload", "vt": "json"}],
+        "repeat": "",
+        "once": false,
+        "payload": "{\"channel\":\"#ping\",\"message\":\"Pong! Gesendet via Node-RED\"}",
+        "payloadType": "json",
+        "x": 170,
+        "y": 100,
+        "wires": [["mqtt_out_channel"]]
+    },
+    {
+        "id": "mqtt_out_channel",
+        "type": "mqtt out",
+        "z": "mesh_channel_flow",
+        "name": "MeshCore Channel",
+        "topic": "meshcore/send/channel",
+        "qos": "1",
+        "retain": "",
+        "broker": "mqtt_broker_local",
+        "x": 420,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "mqtt_broker_local",
+        "type": "mqtt-broker",
+        "name": "Mosquitto Lokal",
+        "broker": "localhost",
+        "port": "1883",
+        "clientid": "nodered-meshcore",
+        "autoConnect": true,
+        "keepalive": "60",
+        "cleansession": true
+    }
+]
+```
+</details>
+
+<details>
+<summary><b>Flow 2: Direktnachricht (DM) senden</b></summary>
+
+Sendet eine DM an einen bestimmten Node im Mesh-Netzwerk.
+
+```json
+[
+    {
+        "id": "mesh_dm_flow",
+        "type": "tab",
+        "label": "MeshCore DM",
+        "disabled": false
+    },
+    {
+        "id": "inject_dm",
+        "type": "inject",
+        "z": "mesh_dm_flow",
+        "name": "Sende DM",
+        "props": [{"p": "payload", "vt": "json"}],
+        "repeat": "",
+        "once": false,
+        "payload": "{\"destination\":\"MeinNode\",\"message\":\"Hallo aus Node-RED!\"}",
+        "payloadType": "json",
+        "x": 170,
+        "y": 100,
+        "wires": [["mqtt_out_dm"]]
+    },
+    {
+        "id": "mqtt_out_dm",
+        "type": "mqtt out",
+        "z": "mesh_dm_flow",
+        "name": "MeshCore DM",
+        "topic": "meshcore/send/dm",
+        "qos": "1",
+        "retain": "",
+        "broker": "mqtt_broker_local_dm",
+        "x": 400,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "mqtt_broker_local_dm",
+        "type": "mqtt-broker",
+        "name": "Mosquitto Lokal",
+        "broker": "localhost",
+        "port": "1883",
+        "clientid": "nodered-meshcore-dm",
+        "autoConnect": true,
+        "keepalive": "60",
+        "cleansession": true
+    }
+]
+```
+</details>
+
+<details>
+<summary><b>Flow 3: Dashboard-Formular → Mesh senden</b></summary>
+
+Ein Node-RED Dashboard-Formular zum freien Eingeben von Channel, Empfänger und Nachricht. Wähle zwischen DM und Channel-Nachricht.
+
+```json
+[
+    {
+        "id": "mesh_dashboard_flow",
+        "type": "tab",
+        "label": "MeshCore Dashboard",
+        "disabled": false
+    },
+    {
+        "id": "inject_form",
+        "type": "inject",
+        "z": "mesh_dashboard_flow",
+        "name": "Channel: #bremesh",
+        "props": [{"p": "payload", "vt": "json"}, {"p": "topic", "vt": "str"}],
+        "repeat": "",
+        "once": false,
+        "topic": "meshcore/send/channel",
+        "payload": "{\"channel\":\"#bremesh\",\"message\":\"Moin aus Node-RED! 73\"}",
+        "payloadType": "json",
+        "x": 190,
+        "y": 100,
+        "wires": [["mqtt_out_dashboard"]]
+    },
+    {
+        "id": "inject_form_dm",
+        "type": "inject",
+        "z": "mesh_dashboard_flow",
+        "name": "DM: kleinBartzi",
+        "props": [{"p": "payload", "vt": "json"}, {"p": "topic", "vt": "str"}],
+        "repeat": "",
+        "once": false,
+        "topic": "meshcore/send/dm",
+        "payload": "{\"destination\":\"kleinBartzi\",\"message\":\"Moin Bartzi, Grüße via Node-RED!\"}",
+        "payloadType": "json",
+        "x": 190,
+        "y": 180,
+        "wires": [["mqtt_out_dashboard"]]
+    },
+    {
+        "id": "mqtt_out_dashboard",
+        "type": "mqtt out",
+        "z": "mesh_dashboard_flow",
+        "name": "MeshCore Send",
+        "topic": "",
+        "qos": "1",
+        "retain": "",
+        "broker": "mqtt_broker_dashboard",
+        "x": 450,
+        "y": 140,
+        "wires": []
+    },
+    {
+        "id": "mqtt_broker_dashboard",
+        "type": "mqtt-broker",
+        "name": "Mosquitto Lokal",
+        "broker": "localhost",
+        "port": "1883",
+        "clientid": "nodered-meshcore-dashboard",
+        "autoConnect": true,
+        "keepalive": "60",
+        "cleansession": true
+    }
+]
+```
+</details>
+
+<details>
+<summary><b>Flow 4: Empfangene Pakete mitlesen (MQTT → Debug)</b></summary>
+
+Empfängt alle Pakete vom Bot und zeigt sie im Debug-Panel an.
+
+```json
+[
+    {
+        "id": "mesh_monitor_flow",
+        "type": "tab",
+        "label": "MeshCore Monitor",
+        "disabled": false
+    },
+    {
+        "id": "mqtt_in_packets",
+        "type": "mqtt in",
+        "z": "mesh_monitor_flow",
+        "name": "Mesh Pakete",
+        "topic": "meshcore/loc/packets",
+        "qos": "0",
+        "datatype": "json",
+        "broker": "mqtt_broker_monitor",
+        "x": 170,
+        "y": 100,
+        "wires": [["debug_packets"]]
+    },
+    {
+        "id": "mqtt_in_status",
+        "type": "mqtt in",
+        "z": "mesh_monitor_flow",
+        "name": "Mesh Status",
+        "topic": "meshcore/loc/status",
+        "qos": "0",
+        "datatype": "json",
+        "broker": "mqtt_broker_monitor",
+        "x": 170,
+        "y": 180,
+        "wires": [["debug_status"]]
+    },
+    {
+        "id": "debug_packets",
+        "type": "debug",
+        "z": "mesh_monitor_flow",
+        "name": "Pakete",
+        "active": true,
+        "tosidebar": true,
+        "complete": "payload",
+        "x": 390,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "debug_status",
+        "type": "debug",
+        "z": "mesh_monitor_flow",
+        "name": "Status",
+        "active": true,
+        "tosidebar": true,
+        "complete": "payload",
+        "x": 390,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "mqtt_broker_monitor",
+        "type": "mqtt-broker",
+        "name": "Mosquitto Lokal",
+        "broker": "localhost",
+        "port": "1883",
+        "clientid": "nodered-meshcore-monitor",
+        "autoConnect": true,
+        "keepalive": "60",
+        "cleansession": true
+    }
+]
+```
+</details>
+
 ### GRP_TXT Channel Decryption
 
 Public hashtag channels (e.g. `#ping`, `#CQ`, `Public`) use deterministic keys derived from the channel name. The packet capture service can decrypt these on the fly:

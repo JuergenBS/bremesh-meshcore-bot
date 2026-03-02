@@ -131,6 +131,10 @@ class PacketCaptureService(BaseServicePlugin):
         self.mqtt_clients: List[Dict[str, Any]] = []
         self.mqtt_connected = False
         
+        # MQTT subscribe (receive messages via MQTT to send into mesh)
+        self.mqtt_subscribe_enabled = self.get_config_bool('mqtt_subscribe_enabled', False)
+        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
+        
         # Stats/status publishing
         self.stats_status_enabled = self.get_config_bool('stats_in_status_enabled', True)
         self.stats_refresh_interval = self.get_config_int('stats_refresh_interval', 300)
@@ -180,6 +184,7 @@ class PacketCaptureService(BaseServicePlugin):
         
         # MQTT configuration
         self.mqtt_enabled = config.getboolean('PacketCapture', 'mqtt_enabled', fallback=True)
+        self.mqtt_subscribe_enabled = config.getboolean('PacketCapture', 'mqtt_subscribe_enabled', fallback=False)
         self.mqtt_brokers = self._parse_mqtt_brokers(config)
         
         # Global IATA
@@ -409,11 +414,20 @@ class PacketCaptureService(BaseServicePlugin):
                 'websocket_path': config.get('PacketCapture', f'mqtt{broker_num}_websocket_path', fallback='/mqtt'),
                 'client_id': config.get('PacketCapture', f'mqtt{broker_num}_client_id', fallback=None),
                 'upload_packet_types': upload_packet_types,
+                'topic_send_dm': config.get('PacketCapture', f'mqtt{broker_num}_topic_send_dm', fallback=None),
+                'topic_send_channel': config.get('PacketCapture', f'mqtt{broker_num}_topic_send_channel', fallback=None),
             }
             
             # Set default topic_prefix if not set
             if not broker['topic_prefix']:
                 broker['topic_prefix'] = 'meshcore/packets'
+            
+            # Set default send topics if subscribe is enabled but no explicit topics
+            if self.mqtt_subscribe_enabled:
+                if not broker['topic_send_dm']:
+                    broker['topic_send_dm'] = f"{broker['topic_prefix']}/send/dm"
+                if not broker['topic_send_channel']:
+                    broker['topic_send_channel'] = f"{broker['topic_prefix']}/send/channel"
             
             brokers.append(broker)
             broker_num += 1
@@ -513,6 +527,9 @@ class PacketCaptureService(BaseServicePlugin):
                 self.logger.info(f"Writing packets to: {self.output_file}")
             except Exception as e:
                 self.logger.error(f"Failed to open output file: {e}")
+        
+        # Store event loop reference for thread-safe MQTT subscribe callbacks
+        self._event_loop = asyncio.get_event_loop()
         
         # Setup event handlers
         await self.setup_event_handlers()
@@ -1429,6 +1446,17 @@ class PacketCaptureService(BaseServicePlugin):
                                 break
                         # Set global connected flag if any broker is connected
                         self.mqtt_connected = any(m.get('connected', False) for m in self.mqtt_clients)
+                        
+                        # Subscribe to send topics if mqtt_subscribe is enabled
+                        if self.mqtt_subscribe_enabled:
+                            send_dm_topic = broker_config.get('topic_send_dm')
+                            send_channel_topic = broker_config.get('topic_send_channel')
+                            if send_dm_topic:
+                                client.subscribe(send_dm_topic, qos=1)
+                                self.logger.info(f"Subscribed to DM send topic: {send_dm_topic}")
+                            if send_channel_topic:
+                                client.subscribe(send_channel_topic, qos=1)
+                                self.logger.info(f"Subscribed to channel send topic: {send_channel_topic}")
                     else:
                         # MQTT error codes: 0=success, 1=protocol, 2=client, 3=network, 4=transport, 5=auth
                         error_messages = {
@@ -1465,6 +1493,10 @@ class PacketCaptureService(BaseServicePlugin):
                 
                 client.on_connect = on_connect
                 client.on_disconnect = on_disconnect
+                
+                # Setup message handler for MQTT subscribe (send to mesh)
+                if self.mqtt_subscribe_enabled:
+                    client.on_message = self._on_mqtt_message
                 
                 # Connect
                 try:
@@ -1685,6 +1717,126 @@ class PacketCaptureService(BaseServicePlugin):
             self.logger.debug(f"No MQTT brokers connected, packet not published")
         
         return metrics
+    
+    def _on_mqtt_message(self, client, userdata, msg) -> None:
+        """Handle incoming MQTT messages for sending into the mesh network.
+        
+        Called from paho-mqtt's network thread. Schedules async send
+        on the bot's event loop.
+        
+        Expected JSON payloads:
+        
+        DM topic (topic_send_dm):
+            {"destination": "NodeName", "message": "Hello!"}
+        
+        Channel topic (topic_send_channel):
+            {"channel": "Public", "message": "Hello everyone!"}
+            or: {"channel": "#bremesh", "message": "Moin!"}
+        """
+        try:
+            payload_str = msg.payload.decode('utf-8', errors='replace')
+            self.logger.info(f"MQTT subscribe received on '{msg.topic}': {payload_str[:200]}")
+            
+            try:
+                data = json.loads(payload_str)
+            except json.JSONDecodeError as e:
+                self.logger.warning(f"MQTT subscribe: invalid JSON on '{msg.topic}': {e}")
+                return
+            
+            message_text = data.get('message', '').strip()
+            if not message_text:
+                self.logger.warning(f"MQTT subscribe: missing 'message' field on '{msg.topic}'")
+                return
+            
+            # Determine message type based on which topic matched
+            is_dm = False
+            is_channel = False
+            for mqtt_info in self.mqtt_clients:
+                cfg = mqtt_info.get('config', {})
+                if msg.topic == cfg.get('topic_send_dm'):
+                    is_dm = True
+                    break
+                elif msg.topic == cfg.get('topic_send_channel'):
+                    is_channel = True
+                    break
+            
+            if is_dm:
+                destination = data.get('destination', '').strip()
+                if not destination:
+                    self.logger.warning("MQTT subscribe: DM missing 'destination' field")
+                    return
+                self.logger.info(f"MQTT → Mesh DM to '{destination}': {message_text[:80]}")
+                if self._event_loop and not self._event_loop.is_closed():
+                    asyncio.run_coroutine_threadsafe(
+                        self._mqtt_send_dm(destination, message_text),
+                        self._event_loop
+                    )
+            elif is_channel:
+                channel = data.get('channel', '').strip()
+                if not channel:
+                    self.logger.warning("MQTT subscribe: channel message missing 'channel' field")
+                    return
+                self.logger.info(f"MQTT → Mesh channel '{channel}': {message_text[:80]}")
+                if self._event_loop and not self._event_loop.is_closed():
+                    asyncio.run_coroutine_threadsafe(
+                        self._mqtt_send_channel(channel, message_text),
+                        self._event_loop
+                    )
+            else:
+                self.logger.warning(f"MQTT subscribe: unrecognized topic '{msg.topic}'")
+                
+        except Exception as e:
+            self.logger.error(f"MQTT subscribe message handler error: {e}")
+    
+    async def _mqtt_send_dm(self, destination: str, message: str) -> None:
+        """Send a direct message into the mesh network (triggered by MQTT).
+        
+        Args:
+            destination: Contact name to send to.
+            message: Message text.
+        """
+        try:
+            if not self.bot.connected or not self.bot.meshcore:
+                self.logger.warning("MQTT → Mesh DM failed: bot not connected")
+                return
+            
+            success = await self.bot.command_manager.send_dm(
+                recipient_id=destination,
+                content=message,
+                command_id=f"mqtt_dm_{int(time.time())}",
+                skip_user_rate_limit=True
+            )
+            if success:
+                self.logger.info(f"MQTT → Mesh DM sent to '{destination}'")
+            else:
+                self.logger.warning(f"MQTT → Mesh DM to '{destination}' failed")
+        except Exception as e:
+            self.logger.error(f"MQTT → Mesh DM error: {e}")
+    
+    async def _mqtt_send_channel(self, channel: str, message: str) -> None:
+        """Send a channel message into the mesh network (triggered by MQTT).
+        
+        Args:
+            channel: Channel name (e.g. 'Public', '#bremesh').
+            message: Message text.
+        """
+        try:
+            if not self.bot.connected or not self.bot.meshcore:
+                self.logger.warning("MQTT → Mesh channel message failed: bot not connected")
+                return
+            
+            success = await self.bot.command_manager.send_channel_message(
+                channel=channel,
+                content=message,
+                command_id=f"mqtt_channel_{int(time.time())}",
+                skip_user_rate_limit=True
+            )
+            if success:
+                self.logger.info(f"MQTT → Mesh channel '{channel}' sent")
+            else:
+                self.logger.warning(f"MQTT → Mesh channel '{channel}' failed")
+        except Exception as e:
+            self.logger.error(f"MQTT → Mesh channel error: {e}")
     
     async def start_background_tasks(self) -> None:
         """Start background tasks.
