@@ -917,7 +917,7 @@ class TelemetryMonitorService(BaseServicePlugin):
                 result['battery_voltage'] = float(value)
                 voltage = float(value)
                 percent = (voltage - 3.0) / (4.2 - 3.0) * 100
-                result['battery_percent'] = max(0.0, min(100.0, percent))
+                result['battery_percent'] = round(max(0.0, min(100.0, percent)), 2)
             elif data_type == 'gps' and isinstance(value, dict):
                 result['latitude'] = value.get('lat')
                 result['longitude'] = value.get('lon')
