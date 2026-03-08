@@ -261,8 +261,9 @@ class TelemetryMonitorService(BaseServicePlugin):
         # Load webhook config from DB (web UI overrides)
         self._load_webhook_config()
 
-        # Migrate repeaters from config into DB on first run
+        # Migrate repeaters from config into DB on first run, then load from DB
         self._migrate_repeaters_from_config()
+        self._load_repeaters_from_db()
 
     def _migrate_repeaters_from_config(self) -> None:
         """Migrate repeaters from config into DB if DB is empty."""
