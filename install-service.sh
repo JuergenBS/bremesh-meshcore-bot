@@ -206,6 +206,23 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
+# Ensure python3-venv is available (Debian/Ubuntu strip it from the default python3 package)
+if ! python3 -c 'import venv' 2>/dev/null; then
+    if command -v apt-get &> /dev/null; then
+        print_info "python3-venv is not installed — installing it now via apt"
+        apt-get update -qq && apt-get install -y -qq python3-venv >/dev/null 2>&1 || {
+            print_error "Failed to install python3-venv. Please install it manually:"
+            print_error "  sudo apt-get install python3-venv"
+            exit 1
+        }
+        print_success "Installed python3-venv"
+    else
+        print_error "Python venv module is not available and apt is not present"
+        print_error "Please install the python3-venv package for your distribution"
+        exit 1
+    fi
+fi
+
 print_section "Step 1: Setting Up Service User"
 if [[ "$IS_MACOS" == true ]]; then
     # Use original user if available, otherwise root
@@ -434,12 +451,21 @@ fi
 # owning a complete, working venv (avoids partial root-owned venv and import errors).
 print_section "Step 4: Setting Up Python Virtual Environment"
 if [ -d "$INSTALL_DIR/venv" ]; then
-    print_info "Virtual environment already exists at $INSTALL_DIR/venv"
-    print_info "Preserving existing virtual environment"
-    if [[ "$UPGRADE_MODE" == true ]]; then
-        print_info "Upgrade mode: will update dependencies"
+    # Validate the existing venv is functional (pip binary must exist)
+    if [ ! -x "$INSTALL_DIR/venv/bin/pip" ] || [ ! -x "$INSTALL_DIR/venv/bin/python" ]; then
+        print_warning "Existing virtual environment at $INSTALL_DIR/venv is broken (missing pip/python)"
+        print_info "Removing broken virtual environment and recreating it"
+        rm -rf "$INSTALL_DIR/venv"
+        python3 -m venv "$INSTALL_DIR/venv"
+        print_success "Recreated virtual environment at $INSTALL_DIR/venv"
     else
-        print_info "Will update dependencies if requirements.txt changed"
+        print_info "Virtual environment already exists at $INSTALL_DIR/venv"
+        print_info "Preserving existing virtual environment"
+        if [[ "$UPGRADE_MODE" == true ]]; then
+            print_info "Upgrade mode: will update dependencies"
+        else
+            print_info "Will update dependencies if requirements.txt changed"
+        fi
     fi
 else
     print_info "Creating an isolated Python environment for the bot"
