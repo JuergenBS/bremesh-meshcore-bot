@@ -412,6 +412,42 @@ if [[ "$IS_LINUX" == true ]]; then
     fi
 fi
 
+# Step 7: Remove Mosquitto MQTT Docker container (if present)
+if command -v docker &> /dev/null || command -v sudo &> /dev/null && sudo docker info &>/dev/null 2>&1; then
+    MOSQUITTO_RUNNING=false
+    if sudo docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^mosquitto$'; then
+        MOSQUITTO_RUNNING=true
+    fi
+
+    MOSQUITTO_CONFIG_EXISTS=false
+    if [ -f /opt/mosquitto/mosquitto.conf ]; then
+        MOSQUITTO_CONFIG_EXISTS=true
+    fi
+
+    if [[ "$MOSQUITTO_RUNNING" == true ]] || [[ "$MOSQUITTO_CONFIG_EXISTS" == true ]]; then
+        print_section "Step 7: MQTT Broker (Mosquitto Docker)"
+        if [[ "$MOSQUITTO_RUNNING" == true ]]; then
+            print_info "Found Mosquitto Docker container"
+            if ask_yes_no "Do you want to stop and remove the Mosquitto MQTT container?"; then
+                sudo docker rm -f mosquitto >/dev/null 2>&1
+                print_success "Removed Mosquitto Docker container"
+            else
+                print_info "Mosquitto container preserved"
+            fi
+        fi
+
+        if [[ "$MOSQUITTO_CONFIG_EXISTS" == true ]]; then
+            print_info "Found Mosquitto configuration at /opt/mosquitto/"
+            if ask_yes_no "Do you want to remove the Mosquitto configuration directory?"; then
+                rm -rf /opt/mosquitto
+                print_success "Removed /opt/mosquitto/"
+            else
+                print_info "Mosquitto configuration preserved"
+            fi
+        fi
+    fi
+fi
+
 # Final summary
 print_section "Uninstallation Complete"
 echo ""
@@ -455,6 +491,17 @@ if [[ "$IS_LINUX" == true ]]; then
     fi
 fi
 
+# Mosquitto status in summary
+if command -v docker &> /dev/null || sudo docker info &>/dev/null 2>&1; then
+    if sudo docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q '^mosquitto$'; then
+        echo -e "  ${CYAN}MQTT broker:${NC}   ${YELLOW}Mosquitto container still running${NC}"
+    elif [ -d /opt/mosquitto ]; then
+        echo -e "  ${CYAN}MQTT broker:${NC}   ${YELLOW}Container removed, config preserved at /opt/mosquitto/${NC}"
+    else
+        echo -e "  ${CYAN}MQTT broker:${NC}   ${GREEN}Removed${NC}"
+    fi
+fi
+
 echo ""
 
 # Check for backup files in common locations
@@ -483,16 +530,11 @@ if [ -n "$CONFIG_BACKUP_FOUND" ] || [ -n "$DB_BACKUP_FOUND" ]; then
     echo ""
 fi
 
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}ℹ️  Additional Notes${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-print_info "Python packages installed via pip are not automatically removed"
-print_info "If you want to remove them, run:"
-echo "  ${YELLOW}pip3 uninstall -r requirements.txt${NC}"
-echo ""
-
 if [[ "$INSTALL_EXISTS" == true ]] && [ -d "$INSTALL_DIR" ]; then
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${BLUE}ℹ️  Additional Notes${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
     print_warning "Installation files are still present at: $INSTALL_DIR"
     print_info "You can remove them manually with:"
     echo "  ${YELLOW}sudo rm -rf $INSTALL_DIR${NC}"
