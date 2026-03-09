@@ -1040,6 +1040,15 @@ class PacketCaptureService(BaseServicePlugin):
                     self.logger.debug(f"Calling publish_packet_mqtt for packet {self.packet_count}")
                 publish_metrics = await self.publish_packet_mqtt(formatted_packet)
             
+            # Store in web viewer database (includes decoded GRP_TXT when available)
+            if (hasattr(self.bot, 'web_viewer_integration') and
+                    self.bot.web_viewer_integration and
+                    self.bot.web_viewer_integration.bot_integration):
+                try:
+                    self.bot.web_viewer_integration.bot_integration.capture_full_packet_data(formatted_packet)
+                except Exception as e:
+                    self.logger.debug(f"Error storing packet for web viewer: {e}")
+            
             # Log DEBUG level for each packet (verbose; use INFO only for service lifecycle)
             action = "Skipping" if publish_metrics.get("skipped_by_filter") else "Captured"
             self.logger.debug(f"📦 {action} packet #{self.packet_count}: {formatted_packet['route']} type {formatted_packet['packet_type']}, {formatted_packet['len']} bytes, SNR: {formatted_packet['SNR']}, RSSI: {formatted_packet['RSSI']}, hash: {formatted_packet['hash']} (MQTT: {publish_metrics['succeeded']}/{publish_metrics['attempted']})")

@@ -762,9 +762,12 @@ class MessageHandler:
                                 self.logger.info(log_message)
                             
                             # Capture full packet data for web viewer (for all packets)
+                            # Skip if packet_capture_service is active — it stores richer data
+                            # (including decrypted GRP_TXT) to avoid duplicates
                             if (hasattr(self.bot, 'web_viewer_integration') and 
                                 self.bot.web_viewer_integration and 
-                                self.bot.web_viewer_integration.bot_integration):
+                                self.bot.web_viewer_integration.bot_integration and
+                                not getattr(self.bot, 'packet_capture_service', None)):
                                 # Use extracted_payload which is the full MeshCore packet
                                 # (header + path_len + path + payload, without RF wrapper)
                                 decoded_packet['raw_packet_hex'] = extracted_payload if extracted_payload else raw_hex
