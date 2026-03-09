@@ -1253,20 +1253,22 @@ class TelemetryMonitorService(BaseServicePlugin):
             logger.debug(f"HBME telemetry forward error: {e}")
 
     def _get_repeater_public_key(self, repeater_name: str) -> Optional[str]:
-        """Look up the public_key for a repeater from the monitored_repeaters table."""
-        if not self._db_conn:
-            return None
-        try:
-            cursor = self._db_conn.cursor()
-            cursor.execute(
-                'SELECT public_key FROM monitored_repeaters WHERE name = ?',
-                (repeater_name,))
-            row = cursor.fetchone()
-            if row and row['public_key']:
-                return row['public_key']
-        except Exception:
-            pass
-        return None
+        """Look up the public_key for a repeater from the monitored_repeaters table,
+        falling back to the bot's contact list."""
+        if self._db_conn:
+            try:
+                cursor = self._db_conn.cursor()
+                cursor.execute(
+                    'SELECT public_key FROM monitored_repeaters WHERE name = ?',
+                    (repeater_name,))
+                row = cursor.fetchone()
+                if row and row['public_key']:
+                    return row['public_key']
+            except Exception:
+                pass
+        # Fallback: resolve from contact list (covers ad-hoc MQTT polls
+        # where the repeater is not in monitored_repeaters)
+        return self._resolve_public_key_for_name(repeater_name)
 
     async def _send_hbme_telemetry(self, hbme_service: Any,
                                    payload: Dict[str, Any],
