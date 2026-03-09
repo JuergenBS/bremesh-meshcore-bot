@@ -892,7 +892,7 @@ class ServicesAPI:
             try:
                 cursor.execute('SELECT poll_interval_minutes FROM service_status WHERE id = 1')
                 row = cursor.fetchone()
-                if row and row['poll_interval_minutes']:
+                if row and row['poll_interval_minutes'] is not None:
                     status['poll_interval_minutes'] = row['poll_interval_minutes']
             except sqlite3.OperationalError:
                 pass
@@ -984,8 +984,8 @@ class ServicesAPI:
         """Save poll interval to telemetry DB (picked up by service at next cycle)."""
         try:
             minutes = int(data.get('minutes', 0))
-            if minutes < 1:
-                return {'success': False, 'error': 'Intervall muss mindestens 1 Minute sein'}
+            if minutes < 0:
+                return {'success': False, 'error': 'Intervall darf nicht negativ sein'}
             if minutes > 1440:
                 return {'success': False, 'error': 'Intervall darf maximal 1440 Minuten (24h) sein'}
             
@@ -999,6 +999,8 @@ class ServicesAPI:
                 (minutes,))
             conn.commit()
             conn.close()
+            if minutes == 0:
+                return {'success': True, 'message': 'Automatisches Polling deaktiviert (nur MQTT/Ad-hoc)'}
             return {'success': True, 'message': f'Poll-Intervall auf {minutes} Minuten gesetzt'}
         except Exception as e:
             self.logger.error(f"Error saving poll interval: {e}")

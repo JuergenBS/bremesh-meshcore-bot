@@ -240,9 +240,10 @@ class TelemetryMonitorService(BaseServicePlugin):
             )
         ''')
 
-        # Seed status row
+        # Seed status row (always sync poll_interval from config)
         cursor.execute('''
-            INSERT OR IGNORE INTO service_status (id, status, poll_interval_minutes) VALUES (1, 'stopped', ?)
+            INSERT INTO service_status (id, status, poll_interval_minutes) VALUES (1, 'stopped', ?)
+            ON CONFLICT(id) DO UPDATE SET poll_interval_minutes = excluded.poll_interval_minutes
         ''', (self.poll_interval_minutes,))
 
         # Seed webhook config row (merge initial config values)
@@ -335,9 +336,9 @@ class TelemetryMonitorService(BaseServicePlugin):
                 'SELECT poll_interval_minutes, mqtt_enabled, mqtt_topic_request, mqtt_topic_response '
                 'FROM service_status WHERE id = 1').fetchone()
             if row:
-                if row['poll_interval_minutes']:
+                if row['poll_interval_minutes'] is not None:
                     new_val = int(row['poll_interval_minutes'])
-                    if new_val >= 1 and new_val != self.poll_interval_minutes:
+                    if new_val >= 0 and new_val != self.poll_interval_minutes:
                         logger.info(f"Poll interval changed: {self.poll_interval_minutes} → {new_val} min")
                         self.poll_interval_minutes = new_val
                 if row['mqtt_enabled'] is not None and row['mqtt_enabled'] != '':
@@ -588,7 +589,32 @@ class TelemetryMonitorService(BaseServicePlugin):
     # ──────────────────────────────────────────────────────────────────
 
     async def _polling_loop(self) -> None:
-        """Main polling loop – periodic + ad-hoc request processing."""
+        """Main polling loop – periodic + ad-hoc request processing.
+
+        When poll_interval_minutes == 0, automatic polling is disabled and only
+        ad-hoc requests (web UI / MQTT) are processed.
+        """
+        if self.poll_interval_minutes == 0:
+            logger.info("Automatic polling disabled (poll_interval_minutes=0), processing ad-hoc/MQTT requests only")
+            self._update_status('waiting', next_poll_time='disabled',
+                                repeaters_total=len(self.repeaters))
+            reload_counter = 0
+            while not self._stop_event.is_set():
+                await self._process_adhoc_requests()
+                reload_counter += 5
+                if reload_counter >= 30:
+                    self._load_repeaters_from_db()
+                    self._reload_poll_interval()
+                    if self.poll_interval_minutes > 0:
+                        logger.info(f"Automatic polling re-enabled: {self.poll_interval_minutes} min")
+                        break  # fall through to normal polling loop
+                    reload_counter = 0
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=5)
+                    return
+                except asyncio.TimeoutError:
+                    pass
+
         initial_delay = (self.poll_interval_minutes * 60) if self.delay_first_poll else 10
         next_poll_time = datetime.now() + timedelta(seconds=initial_delay)
 
@@ -618,6 +644,30 @@ class TelemetryMonitorService(BaseServicePlugin):
 
             self._last_poll_time = datetime.now()
             self._reload_poll_interval()
+
+            # If poll interval was set to 0 via web UI, switch to ad-hoc-only mode
+            if self.poll_interval_minutes == 0:
+                logger.info("Automatic polling disabled via web UI (poll_interval_minutes=0)")
+                self._update_status('waiting', next_poll_time='disabled',
+                                    repeaters_total=len(self.repeaters))
+                reload_counter = 0
+                while not self._stop_event.is_set():
+                    await self._process_adhoc_requests()
+                    reload_counter += 5
+                    if reload_counter >= 30:
+                        self._load_repeaters_from_db()
+                        self._reload_poll_interval()
+                        if self.poll_interval_minutes > 0:
+                            logger.info(f"Automatic polling re-enabled: {self.poll_interval_minutes} min")
+                            break
+                        reload_counter = 0
+                    try:
+                        await asyncio.wait_for(self._stop_event.wait(), timeout=5)
+                        return
+                    except asyncio.TimeoutError:
+                        pass
+                continue  # re-enter main loop if re-enabled
+
             next_poll = datetime.now() + timedelta(minutes=self.poll_interval_minutes)
             self._update_status('waiting', current_repeater=None, current_attempt=None,
                                 next_poll_time=next_poll.strftime('%Y-%m-%d %H:%M:%S'),
