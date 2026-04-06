@@ -11,9 +11,9 @@ import configparser
 import logging
 import subprocess
 import threading
-from datetime import datetime, timedelta, date
+from datetime import datetime
 from flask import Flask, render_template, jsonify, request, send_from_directory, make_response
-from flask_socketio import SocketIO, emit, join_room, leave_room, disconnect
+from flask_socketio import SocketIO, emit, disconnect
 from pathlib import Path
 import os
 import sys
@@ -23,7 +23,6 @@ from typing import Dict, Any, Optional, List
 project_root = os.path.join(os.path.dirname(__file__), '..', '..')
 sys.path.insert(0, project_root)
 
-from modules.db_manager import DBManager
 from modules.repeater_manager import RepeaterManager
 from modules.utils import resolve_path, calculate_distance
 from modules.web_viewer.services_api import ServicesAPI
